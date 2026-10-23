@@ -182,11 +182,21 @@ async def _frame_policy(request: web.Request, response: web.StreamResponse) -> N
     response.headers["Content-Security-Policy"] = f"{policy}; {rule}" if policy else rule
 
 
-def _cookie_options(request: web.Request) -> dict[str, Any]:
-    """Strict by default. A page that may be framed by another site needs SameSite=None, which needs Secure."""
-    if request.app[SETTINGS].frame_ancestors:
-        return {"httponly": True, "samesite": "None", "secure": True}
-    return {"httponly": True, "samesite": "Strict", "secure": _secure(request)}
+def _set_session_cookie(response: web.StreamResponse, request: web.Request, value: str, max_age: int) -> None:
+    """The sign-in cookie. Strict by default. A page that another site may frame needs SameSite=None, which needs
+    Secure, and Partitioned (CHIPS), which keeps the cookie to the framing site and lets browsers that block
+    third-party cookies keep it. Over plain HTTP (an agent's raw IP) a Secure cookie would be dropped, and no site
+    frames an HTTP page, so there it stays Strict. Written by hand: Python's cookie module only knows Partitioned
+    from 3.14."""
+    secure = _secure(request)
+    parts = [f"{COOKIE}={value}", "Path=/", f"Max-Age={max_age}", "HttpOnly"]
+    if max_age == 0:
+        parts.append("Expires=Thu, 01 Jan 1970 00:00:00 GMT")
+    if request.app[SETTINGS].frame_ancestors and secure:
+        parts += ["Secure", "SameSite=None", "Partitioned"]
+    else:
+        parts += ["Secure", "SameSite=Strict"] if secure else ["SameSite=Strict"]
+    response.headers.add("Set-Cookie", "; ".join(parts))
 
 
 def embed_link_token(secret: str, now: float | None = None, nonce: str | None = None) -> str:
@@ -220,7 +230,7 @@ async def embed(request: web.Request) -> web.Response:
         return _error(401, "this link has expired; open the chat again")
     used[nonce] = expires
     response = web.Response(status=302, headers={"Location": "/", "Cache-Control": "no-store"})
-    response.set_cookie(COOKIE, request.app[TOKEN], max_age=60 * 60 * 24 * 30, **_cookie_options(request))
+    _set_session_cookie(response, request, request.app[TOKEN], 60 * 60 * 24 * 30)
     return response
 
 
@@ -364,13 +374,13 @@ async def login(request: web.Request) -> web.Response:
         return _error(401, "wrong email or password" if settings.login_email else "wrong password")
     tries.pop(ip, None)
     response = web.json_response({"signed_in": True})
-    response.set_cookie(COOKIE, request.app[TOKEN], max_age=60 * 60 * 24 * 30, **_cookie_options(request))
+    _set_session_cookie(response, request, request.app[TOKEN], 60 * 60 * 24 * 30)
     return response
 
 
 async def logout(request: web.Request) -> web.Response:
     response = web.json_response({"signed_in": False})
-    response.del_cookie(COOKIE, **_cookie_options(request))
+    _set_session_cookie(response, request, "", 0)
     return response
 
 

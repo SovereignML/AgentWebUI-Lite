@@ -136,6 +136,7 @@ async function boot() {
   try {
     const session = await api('/api/session');
     store.set({ passwordRequired: session.password_required, emailRequired: session.email_required, signedIn: session.signed_in });
+    tellFramingPage(session.signed_in);
     if (!session.signed_in) return;
     const config = await loadConfig();
     brandDefaults(config.brand);
@@ -149,6 +150,13 @@ async function boot() {
     if (e.status === 401) return;
     store.set(e.status === 0 ? { offline: true, bootError: e.message } : { bootError: e.message });
   }
+}
+
+// A site that frames this page (FRAME_ANCESTORS) learns whether the browser is signed in here. A browser that blocks
+// the framed sign-in cookie lands on the sign-in page, and the site can offer this page in its own tab instead.
+// Only a yes or no is sent, so any origin may hear it.
+function tellFramingPage(signedIn) {
+  if (window.parent !== window) window.parent.postMessage({ source: 'agentwebui-lite', signedIn: !!signedIn }, '*');
 }
 
 // BRAND_THEME and BRAND_ACCENT in .env are where a browser starts; its own appearance choice wins once made.
