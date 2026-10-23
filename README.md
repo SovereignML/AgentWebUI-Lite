@@ -125,6 +125,9 @@ FILES_ROOTS=~/code,~/notes         # what Files shows and where agents may work
 - To show the page inside another site, such as your own dashboard: list that site in `FRAME_ANCESTORS`, set
   `EMBED_SECRET`, and have the site open the frame at a one-time `/embed?token=…` link it signs (the format is in
   `.env.example`). `LOCK_MODEL` and `LOCK_FOLDER` hide the model and folder choices when the site decides them.
+  The framed page tells its parent whether the browser is signed in (`postMessage` of
+  `{source: "agentwebui-lite", signedIn}`), so the site can offer the page in its own tab when a browser refuses
+  the framed sign-in cookie.
 - Models and agents come only from `.env`; the browser switches between them, hides models you don't use, and
   remembers your defaults (Settings › Chat has "Reset to defaults").
 

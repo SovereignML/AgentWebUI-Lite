@@ -41,15 +41,43 @@ async def test_only_this_server_may_frame_the_page_unless_told(settings_for, cli
 
 
 async def test_an_embed_link_signs_in_once(settings_for, client_for):
-    client = await client_for(settings_for(password="secret", embed_secret=SECRET, frame_ancestors=(DASHBOARD,)))
+    client = await client_for(settings_for(password="secret", embed_secret=SECRET, frame_ancestors=(DASHBOARD,),
+                                           trust_proxy=True))
     token = embed_link_token(SECRET)
-    first = await client.get(f"/embed?token={token}", allow_redirects=False)
+    https = {"X-Forwarded-Proto": "https"}
+    first = await client.get(f"/embed?token={token}", allow_redirects=False, headers=https)
     assert first.status == 302 and first.headers["Location"] == "/"
-    cookie = first.cookies["awl_session"]
-    assert cookie["samesite"] == "None" and cookie["secure"]
+    cookie = first.headers["Set-Cookie"]
+    for part in ("HttpOnly", "Secure", "SameSite=None", "Partitioned"):
+        assert part in cookie.split("; ")
+    value = cookie.split(";")[0].split("=", 1)[1]
     # Secure cookies don't travel over the test's plain HTTP, so hand it back the way a browser on HTTPS would.
-    assert (await client.get("/api/chats", headers={"Cookie": f"awl_session={cookie.value}"})).status == 200
-    assert (await client.get(f"/embed?token={token}", allow_redirects=False)).status == 401  # used up
+    assert (await client.get("/api/chats", headers={"Cookie": f"awl_session={value}"})).status == 200
+    assert (await client.get(f"/embed?token={token}", allow_redirects=False, headers=https)).status == 401  # used up
+
+
+async def test_a_framed_server_still_signs_in_over_plain_http(settings_for, client_for):
+    # An agent's raw IP is plain HTTP: a Secure cookie would be dropped there, and nothing frames an HTTP page.
+    client = await client_for(settings_for(password="secret", embed_secret=SECRET, frame_ancestors=(DASHBOARD,),
+                                           trust_proxy=True))
+    got = await client.post("/api/login", json={"password": "secret"}, headers={"X-Forwarded-Proto": "http"})
+    assert got.status == 200
+    parts = got.headers["Set-Cookie"].split("; ")
+    assert "SameSite=Strict" in parts and "Secure" not in parts and "Partitioned" not in parts
+    assert (await client.get("/api/chats")).status == 200  # the test client kept the cookie
+    out = await client.post("/api/logout", headers={"X-Forwarded-Proto": "http"})
+    assert "Max-Age=0" in out.headers["Set-Cookie"].split("; ")
+
+
+async def test_signing_in_on_https_keeps_the_framed_cookie_shape(settings_for, client_for):
+    client = await client_for(settings_for(password="secret", frame_ancestors=(DASHBOARD,), trust_proxy=True))
+    got = await client.post("/api/login", json={"password": "secret"}, headers={"X-Forwarded-Proto": "https"})
+    parts = got.headers["Set-Cookie"].split("; ")
+    assert "SameSite=None" in parts and "Secure" in parts and "Partitioned" in parts
+    plain = await client_for(settings_for(password="secret", trust_proxy=True))
+    got = await plain.post("/api/login", json={"password": "secret"}, headers={"X-Forwarded-Proto": "https"})
+    parts = got.headers["Set-Cookie"].split("; ")
+    assert "SameSite=Strict" in parts and "Secure" in parts and "Partitioned" not in parts
 
 
 async def test_bad_and_old_embed_links_are_refused(settings_for, client_for):
